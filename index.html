@@ -95,7 +95,9 @@
                     <path d="M9 9.5h.01M15 9.5h.01"/>
                   </svg>
                 </div>
-                <p v-if="modelState==='error'">{{ modelError }}<br>请确认通过本地服务器访问（见 README）</p>
+                <p v-if="modelState==='error'">{{ modelError }}<br>
+                  <button class="btn sm" style="margin-top:8px" @click="retryModel">重试加载模型</button>
+                </p>
                 <p v-else-if="mode==='camera'">点击「开启摄像头」开始实时情绪识别<br>所有画面只在你的浏览器里处理，不会上传</p>
                 <p v-else-if="mode==='image'">选择一张人脸图片，或点击下方演示素材</p>
                 <p v-else-if="mode==='video'">打开一段含人脸的视频（或点「载入示例视频」），逐帧分析情绪</p>
