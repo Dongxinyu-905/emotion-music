@@ -186,9 +186,23 @@ export class EmotionEngine {
     this.backend = tf.getBackend();
 
     const base = new URL('models/', document.baseURI).href;
-    await faceapi.nets.tinyFaceDetector.loadFromUri(base);
-    await faceapi.nets.faceLandmark68Net.loadFromUri(base);
-    await faceapi.nets.faceExpressionNet.loadFromUri(base);
+    // 单次网络抖动不该让整页卡在「加载中」：逐个模型带重试地加载
+    const loadWithRetry = async (net, name, tries = 3) => {
+      let lastErr = null;
+      for (let i = 0; i < tries; i++) {
+        try {
+          await net.loadFromUri(base);
+          return;
+        } catch (e) {
+          lastErr = e;
+          if (i < tries - 1) await new Promise(r => setTimeout(r, 600 * (i + 1)));
+        }
+      }
+      throw new Error(`${name} 加载失败（已重试 ${tries} 次）：${lastErr && lastErr.message}`);
+    };
+    await loadWithRetry(faceapi.nets.tinyFaceDetector, '人脸检测模型');
+    await loadWithRetry(faceapi.nets.faceLandmark68Net, '关键点模型');
+    await loadWithRetry(faceapi.nets.faceExpressionNet, '表情分类模型');
 
     this.opts = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.32 });
     this.ready = true;
