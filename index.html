@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MoodTune · 人脸情绪识别音乐推荐系统</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎧</text></svg>">
+</head>
+<body>
+<div id="app" v-cloak>
+  <div class="wrap">
+
+    <!-- ======================= 顶栏 ======================= -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round">
+            <path d="M4 14v-2a8 8 0 0 1 16 0v2"/>
+            <rect x="2.5" y="13" width="4" height="7" rx="1.6" fill="#fff" stroke="none"/>
+            <rect x="17.5" y="13" width="4" height="7" rx="1.6" fill="#fff" stroke="none"/>
+            <circle cx="12" cy="9.5" r=".9" fill="#fff" stroke="none"/>
+          </svg>
+        </div>
+        <div>
+          <h1>MoodTune · 情绪音乐推荐</h1>
+          <p>人脸情绪识别 · 全本地推理 · 情绪驱动歌单</p>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <span class="chip" :class="modelState==='ready' ? 'on' : (modelState==='error' ? 'err' : 'busy')">
+        <i class="dot"></i>
+        <template v-if="modelState==='ready'">本地模型就绪 · {{ backend.toUpperCase() }}</template>
+        <template v-else-if="modelState==='error'">模型加载失败</template>
+        <template v-else>正在加载本地模型…</template>
+      </span>
+      <span class="chip" :class="onlineEnabled ? 'on' : ''">
+        <i class="dot"></i>{{ onlineEnabled ? '在线曲库已开启' : '仅本地曲库' }}
+      </span>
+      <button class="btn" @click="showDocs = true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="12" cy="12" r="9"/><path d="M12 17v-5M12 8h.01"/>
+        </svg>
+        算法说明
+      </button>
+    </header>
+
+    <div class="grid">
+      <!-- ======================= 左：采集 ======================= -->
+      <div>
+        <section class="card">
+          <div class="card-head">
+            <h2>人脸采集</h2>
+            <span class="hint">摄像头 / 图片 / 视频 / 拍照</span>
+            <div class="spacer"></div>
+            <span class="chip" v-if="mode!=='image'">
+              <i class="dot" :class="camState==='running' ? 'on' : (camState==='denied' ? 'err' : 'busy')"></i>
+              {{ mode==='video' ? (videoReady ? '视频已载入' : '等待视频') : (camState==='running' ? '摄像头运行中' : (camState==='starting' ? '启动中…' : '摄像头未开启')) }}
+            </span>
+            <span class="chip" v-else><i class="dot" :class="imageSrc ? 'on' : ''"></i>{{ imageSrc ? '图片已载入' : '未选择图片' }}</span>
+          </div>
+
+          <div class="card-body">
+            <!-- 输入方式 -->
+            <div class="tabs">
+              <button class="tab" :class="{active: mode==='camera'}" @click="switchMode('camera')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M15 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3.5l6 4v-11l-6 4Z"/></svg>
+                实时摄像头
+              </button>
+              <button class="tab" :class="{active: mode==='image'}" @click="switchMode('image')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 17 5-4.5 4 3.5 3-2.5 4 3.5"/></svg>
+                上传图片
+              </button>
+              <button class="tab" :class="{active: mode==='video'}" @click="switchMode('video')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="2.5" y="6" width="13" height="12" rx="2.5"/><path d="m15.5 12 6-3.5v11l-6-3.5"/></svg>
+                打开视频
+              </button>
+              <button class="tab" :class="{active: mode==='shot'}" @click="switchMode('shot')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 8h3l1.6-2h6.8L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.6"/></svg>
+                拍照识别
+              </button>
+            </div>
+
+            <!-- 画面 -->
+            <div class="stage">
+              <video ref="videoEl" v-show="showVideo" :class="{mirror: mode!=='video'}"
+                     playsinline muted autoplay></video>
+              <img v-if="mode==='image' && imageSrc" id="still-img" :src="imageSrc" alt="待识别图片">
+              <canvas ref="overlayEl" class="layer" :class="{mirror: mode!=='video'}"></canvas>
+
+              <div class="stage-empty" v-if="!hasMedia">
+                <div class="ico">
+                  <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round">
+                    <circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8"/>
+                    <path d="M9 9.5h.01M15 9.5h.01"/>
+                  </svg>
+                </div>
+                <p v-if="modelState==='error'">{{ modelError }}<br>请确认通过本地服务器访问（见 README）</p>
+                <p v-else-if="mode==='camera'">点击「开启摄像头」开始实时情绪识别<br>所有画面只在你的浏览器里处理，不会上传</p>
+                <p v-else-if="mode==='image'">选择一张人脸图片，或点击下方演示素材</p>
+                <p v-else-if="mode==='video'">打开一段含人脸的视频（或点「载入示例视频」），逐帧分析情绪</p>
+                <p v-else>点击「开启摄像头」，倒计时后自动拍照并识别</p>
+              </div>
+
+              <div class="stage-badge">
+                <span class="live" v-if="mode!=='image' && camState==='running'">LIVE</span>
+                <span v-if="frame && frame.exists">{{ frame.faces }} face · {{ inferMs }}ms</span>
+              </div>
+
+              <div class="countdown" v-if="countdown">{{ countdown }}</div>
+              <div class="flash" :class="{go: flash}"></div>
+            </div>
+
+            <!-- 操作 -->
+            <div class="controls">
+              <template v-if="mode==='camera'">
+                <button class="btn primary" v-if="camState!=='running'" @click="startCamera" :disabled="modelState!=='ready'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M15 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3.5l6 4v-11l-6 4Z"/></svg>
+                  开启摄像头
+                </button>
+                <button class="btn" v-else @click="stopCamera">关闭摄像头</button>
+                <button class="btn" @click="switchMode('shot')">拍照识别</button>
+                <span class="hint" v-if="camError" style="color:var(--danger);font-size:11.5px">{{ camError }}</span>
+              </template>
+
+              <template v-else-if="mode==='image'">
+                <label class="btn primary">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M4 16v2.5a1.5 1.5 0 0 0 1.5 1.5h13a1.5 1.5 0 0 0 1.5-1.5V16"/></svg>
+                  选择本地图片
+                  <input type="file" accept="image/*" style="display:none" @change="onFilePick($event,'image')">
+                </label>
+                <button class="btn" v-if="imageSrc" @click="loadDemo(imageSrc, imageName)">重新分析</button>
+                <span class="hint" v-if="imageName" style="font-size:11.5px;color:var(--ink-3)">{{ imageName }}</span>
+              </template>
+
+              <template v-else-if="mode==='video'">
+                <label class="btn primary">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M4 16v2.5a1.5 1.5 0 0 0 1.5 1.5h13a1.5 1.5 0 0 0 1.5-1.5V16"/></svg>
+                  打开本地视频
+                  <input type="file" accept="video/*" style="display:none" @change="onFilePick($event,'video')">
+                </label>
+                <button class="btn" @click="loadDemoVideo">载入示例视频</button>
+                <span class="hint" v-if="videoName" style="font-size:11.5px;color:var(--ink-3)">{{ videoName }}</span>
+              </template>
+
+              <template v-else>
+                <button class="btn primary" @click="capturePhoto" :disabled="modelState!=='ready'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="13" r="4"/><path d="M4 8h3l1.6-2h6.8L17 8h3v11H4z"/></svg>
+                  3 秒倒计时拍照
+                </button>
+                <button class="btn" v-if="camState==='running'" @click="stopCamera">关闭摄像头</button>
+                <span class="hint" style="font-size:11.5px;color:var(--ink-3)">拍照后会冻结画面并做单帧识别</span>
+              </template>
+            </div>
+
+            <!-- 拖拽区 -->
+            <div class="dropzone"
+                 v-if="mode==='image' || mode==='video'"
+                 :class="{over: dropOver}"
+                 @dragover.prevent="dropOver = true"
+                 @dragleave.prevent="dropOver = false"
+                 @drop="onDrop">
+              <div class="txt">
+                <b>也可以把{{ mode==='image' ? '图片' : '视频' }}拖到这里</b>
+                <p>支持 JPG / PNG / WEBP 与 MP4 / WEBM / MOV，文件不会被上传</p>
+              </div>
+            </div>
+
+            <!-- 演示素材 -->
+            <div style="display:flex;align-items:center;gap:8px;margin-top:16px">
+              <span style="font-size:11.5px;color:var(--ink-3)">演示人脸（AI 生成，点击直接识别）</span>
+              <div style="flex:1"></div>
+              <span class="tag">8 张</span>
+            </div>
+            <div class="demo-strip">
+              <div class="demo" v-for="d in DEMO_FACES" :key="d.file"
+                   :class="{on: imageSrc===d.file}" @click="loadDemo(d.file, d.label)">
+                <img :src="d.file" :alt="d.label" loading="lazy">
+                <div class="cap">{{ d.label }}</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ======================= 右：结果 + 推荐 ======================= -->
+      <div>
+        <!-- 情绪结果 -->
+        <section class="card">
+          <div class="card-head">
+            <h2>情绪识别结果</h2>
+            <div class="spacer"></div>
+            <span class="chip" v-if="frame && frame.primary && frame.primary.frames >= 3">
+              <i class="dot on"></i>稳定度 {{ Math.round((frame.stability||0)*100) }}%
+            </span>
+            <button class="btn small ghost" @click="showDetail = !showDetail">
+              {{ showDetail ? '收起细节' : '算法细节' }}
+            </button>
+          </div>
+          <div class="card-body">
+            <template v-if="frame && frame.exists && primaryEmo">
+              <div class="emotion-hero">
+                <div class="emo-face" :style="{background: primaryEmo.soft}">{{ primaryEmo.emoji }}</div>
+                <div class="emo-main">
+                  <div class="label" :style="{color: primaryEmo.color}">
+                    {{ primaryEmo.label }}<em>{{ primaryEmo.en }}</em>
+                  </div>
+                  <div class="sub">
+                    <span class="tag brand">置信度 {{ confPct }}%</span>
+                    <span class="tag ok" v-if="frame.primary.consistency > 0.62">CNN 与几何一致</span>
+                    <span class="tag warn" v-else>层级存在分歧</span>
+                    <span class="tag" v-if="frame.faces > 1">检测到 {{ frame.faces }} 张人脸</span>
+                    <span class="tag" v-if="frame.primary.frames > 1">{{ frame.primary.frames }} 帧平滑</span>
+                    <span class="tag" v-else>单帧识别</span>
+                  </div>
+                </div>
+                <div class="conf-ring">
+                  <svg width="64" height="64" viewBox="0 0 64 64">
+                    <circle cx="32" cy="32" r="26" fill="none" stroke="#eef0f7" stroke-width="6"/>
+                    <circle cx="32" cy="32" r="26" fill="none" :stroke="primaryEmo.color" stroke-width="6"
+                            stroke-linecap="round" :stroke-dasharray="confDash.c" :stroke-dashoffset="confDash.off"
+                            style="transition:stroke-dashoffset .5s"/>
+                  </svg>
+                  <div class="val" :style="{color: primaryEmo.color}">{{ confPct }}</div>
+                </div>
+              </div>
+
+              <div class="bars">
+                <div class="bar-row" v-for="r in emoRows" :key="r.key"
+                     :class="{top: frame.primary && r.key === frame.primary.key}">
+                  <span class="name">{{ r.label }}</span>
+                  <div class="bar-track">
+                    <div class="fill" :style="{width: (r.p*100)+'%', background: r.color}"></div>
+                  </div>
+                  <span class="num">{{ (r.p*100).toFixed(0) }}%</span>
+                </div>
+              </div>
+
+              <div class="meta-grid">
+                <div class="cell">
+                  <div class="k">效价 Valence</div>
+                  <div class="v">{{ (frame.valence||0).toFixed(2) }}</div>
+                </div>
+                <div class="cell">
+                  <div class="k">唤醒度 Arousal</div>
+                  <div class="v">{{ (frame.arousal||0).toFixed(2) }}</div>
+                </div>
+                <div class="cell">
+                  <div class="k">单帧推理</div>
+                  <div class="v">{{ inferMs }} ms</div>
+                </div>
+              </div>
+
+              <!-- 算法透视 -->
+              <div v-if="showDetail" style="margin-top:16px">
+                <div class="detail-title">双层融合权重</div>
+                <div class="fusion">
+                  <div class="fusion-bar">
+                    <div class="w1" :style="{width: ((1-(frame.primary.wGeo||0.28))*100)+'%'}">CNN 表情分类 {{ Math.round((1-(frame.primary.wGeo||0.28))*100) }}%</div>
+                    <div class="w2" :style="{width: ((frame.primary.wGeo||0.28)*100)+'%'}">几何规则 {{ Math.round((frame.primary.wGeo||0.28)*100) }}%</div>
+                  </div>
+                  <div class="fusion-note">
+                    一致性 {{ ((frame.primary.consistency||0)*100).toFixed(0) }}% ·
+                    检测分 {{ (frame.primary.detectorScore||0).toFixed(2) }} ·
+                    边际差 {{ ((frame.primary.margin||0)*100).toFixed(0) }}%
+                  </div>
+                </div>
+
+                <div class="detail-title" style="margin-top:14px">68 点几何特征读数（瞳距归一化）</div>
+                <div class="feat-grid">
+                  <div class="feat" v-for="f in featRows" :key="f.key">
+                    <div class="feat-top"><span>{{ f.label }}</span><b>{{ f.v.toFixed(3) }}</b></div>
+                    <div class="feat-track"><div class="feat-fill" :style="{width: f.pct+'%', background: primaryEmo.color}"></div></div>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <div class="empty" v-else>
+              <div class="ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round">
+                  <circle cx="12" cy="12" r="9"/><path d="M9 9.5h.01M15 9.5h.01"/><path d="M9 15h6"/>
+                </svg>
+              </div>
+              <p v-if="modelState==='error'">{{ modelError }}</p>
+              <p v-else>还没有识别结果<br>开启摄像头、选择图片或视频，或点击演示人脸</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 推荐 -->
+        <section class="card">
+          <div class="card-head">
+            <h2>情绪歌单推荐</h2>
+            <div class="spacer"></div>
+            <label class="switch" :class="{on: onlineEnabled}" @click.prevent="onlineEnabled = !onlineEnabled">
+              <span class="rail"></span>在线曲库
+            </label>
+          </div>
+          <div class="card-body">
+            <div class="segmented">
+              <button v-for="s in STRATEGIES" :key="s.key"
+                      :class="{on: strategy===s.key}" @click="strategy = s.key">
+                {{ s.icon }} {{ s.label }}
+              </button>
+            </div>
+            <p style="margin:8px 0 0;font-size:11.5px;color:var(--ink-3)">
+              {{ recDesc }}<template v-if="target"> · 目标速度 ≈ {{ targetTempo }} BPM</template>
+            </p>
+
+            <div class="acoustic" v-if="target">
+              <div class="row" v-for="row in acousticRows" :key="row.key">
+                <span>{{ row.label }}</span>
+                <div class="ac-track">
+                  <div class="fill" :style="{width: (row.mean*100)+'%'}"></div>
+                  <div class="mark" :style="{left: Math.min(98, row.target*100)+'%'}"></div>
+                </div>
+                <span>{{ row.target.toFixed(2) }}</span>
+              </div>
+              <div class="legend">柱 = 推荐曲单均值 ｜ 竖线 = 情绪目标</div>
+            </div>
+
+            <div class="list-head">
+              <b>推荐曲目</b>
+              <span class="tag warn" v-if="recommending && recBusyKey">按「{{ (EMOTIONS.find(e=>e.key===recBusyKey)||{}).label }}」重算中…</span>
+              <span class="tag">{{ recInfo.from }}</span>
+              <span class="tag" v-if="recInfo.measured">实测 {{ recInfo.measured }}</span>
+              <span class="tag" v-if="recInfo.estimated">估计 {{ recInfo.estimated }}</span>
+              <div style="flex:1"></div>
+              <button class="btn small" @click="reroll" :disabled="recommending">
+                {{ recommending ? '计算中…' : '换一批' }}
+              </button>
+            </div>
+
+            <div class="track-list" v-if="playlist.length">
+              <div class="track" v-for="t in playlist" :key="t.id"
+                   :class="{active: current && current.id===t.id}" @click="playTrack(t)">
+                <div class="cover" :style="coverStyle(t)">
+                  <span v-if="!t.artwork" style="font-size:16px">{{ t.emoji || '🎵' }}</span>
+                  <img v-if="t.artwork" :src="t.artwork" alt="" loading="lazy">
+                  <div class="eq" v-if="current && current.id===t.id && playing">
+                    <i></i><i></i><i></i>
+                  </div>
+                </div>
+                <div class="info">
+                  <div class="title">{{ t.title }}</div>
+                  <div class="sub">
+                    <span class="src" :class="{online: t.source!=='local'}">
+                      {{ t.source==='local' ? '本地' : (t.source==='itunes' ? 'iTunes' : 'Audius') }}
+                    </span>
+                    <span style="overflow:hidden;text-overflow:ellipsis">{{ t.artist }}</span>
+                    <span>· {{ t.source==='local' ? '合成参数' : (t.featSource==='measured' ? '音频实测' : '元数据估计') }} {{ Math.round(t.features.tempo) }}BPM</span>
+                  </div>
+                  <div class="reasons">
+                    <span class="reason" v-for="r in t.reasons" :key="r">{{ r }}</span>
+                  </div>
+                </div>
+                <div class="right">
+                  <span class="score-pill">{{ Math.round(t.score*100) }}</span>
+                  <button class="icon-btn" :class="{on: t.liked}" @click.stop="like(t)" title="喜欢">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 20s-7-4.3-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.7-7 9-7 9Z"/></svg>
+                  </button>
+                  <button class="icon-btn" @click.stop="dislike(t)" title="不喜欢">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="empty" v-else-if="recommending">
+              <div class="skeleton-list">
+                <div class="sk" v-for="i in 4" :key="i"><span></span><div><i></i><em></em></div></div>
+              </div>
+              <p style="margin-top:10px">正在检索曲库并解析音频特征…</p>
+            </div>
+
+            <div class="empty" v-else>
+              <div class="ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round">
+                  <path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>
+                </svg>
+              </div>
+              <p>识别出情绪后，这里会出现按情绪排好的歌单</p>
+            </div>
+
+            <!-- 播放器 -->
+            <div class="player" v-if="current">
+              <div class="player-top">
+                <div class="cover" :style="coverStyle(current)">
+                  <span v-if="!current.artwork" style="font-size:16px">{{ current.emoji || '🎵' }}</span>
+                  <img v-if="current.artwork" :src="current.artwork" alt="">
+                </div>
+                <div class="now">
+                  <div class="t">{{ current.title }}</div>
+                  <div class="a">{{ current.artist }} · {{ current.genre || '' }}</div>
+                </div>
+                <div class="transport">
+                  <button class="icon-btn" @click="prev" title="上一首">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14h2V5H7zm3 7 9 7V5l-9 7z"/></svg>
+                  </button>
+                  <button class="play" @click="togglePlay">
+                    <svg v-if="!playing" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                    <svg v-else viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+                  </button>
+                  <button class="icon-btn" @click="next" title="下一首">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 5v14h-2V5h2zm-3 7-9 7V5l9 7z"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="progress">
+                <span>{{ fmtTime(progress) }}</span>
+                <div class="seek" @click="seek">
+                  <div class="buf" style="width:100%"></div>
+                  <div class="cur" :style="{width: progressPct+'%'}"></div>
+                  <div class="knob" :style="{left: progressPct+'%'}"></div>
+                </div>
+                <span>{{ fmtTime(duration || current.duration) }}</span>
+                <div class="vol">
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M4 9h3l4-4v14l-4-4H4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+                  <input type="range" min="0" max="1" step="0.01" v-model.number="volume">
+                </div>
+              </div>
+              <audio ref="audioEl" @timeupdate="onTime" @loadedmetadata="onMeta" @ended="next" @error="onAudioError" preload="metadata"></audio>
+            </div>
+
+            <div class="pref-bar">
+              <span>偏好学习：喜欢 {{ prefStats.like }} · 不喜欢 {{ prefStats.dislike }}</span>
+              <div style="flex:1"></div>
+              <button class="btn small ghost" @click="resetPrefs">重置偏好</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" v-if="toastMsg">{{ toastMsg }}</div>
+
+  <!-- ======================= 算法说明 ======================= -->
+  <div class="modal-mask" v-if="showDocs" @click.self="showDocs = false">
+    <div class="modal">
+      <button class="btn small ghost modal-close" @click="showDocs = false">关闭</button>
+      <h2>算法说明</h2>
+      <p class="lead">
+        系统由「本地情绪识别」与「情绪驱动推荐」两个算法模块组成，全部推理在浏览器内完成，
+        人脸画面不会上传到任何服务器。
+      </p>
+
+      <div class="formula">
+        输入(图片/视频帧/摄像头帧) → 人脸检测 → 68 关键点 → ① CNN 表情分类 + ② 几何规则引擎
+        → 融合 + 时序平滑 → 情绪分布与置信度 → 情绪原型 → 声学目标向量 → 候选曲库打分 → MMR 重排 → 歌单
+      </div>
+
+      <h3>一、情绪识别算法（全本地）</h3>
+      <p><b>1. 人脸检测</b>：TinyFaceDetector（SSD-MobileNet 轻量化结构），输入 416×416，
+        置信度阈值 0.32，一次前向可检出多张人脸并回归边界框。</p>
+      <p><b>1.5 多尺度补检</b>：TinyFaceDetector 对占画面 80% 以上的正脸特写容易漏检。
+        若原始尺寸 0 检出，则把画面居中放入 1.8×、2.6× 的留白画布（降低人脸相对尺寸）重试，
+        再把框与关键点坐标逆变换回原图，取第一个有脸的结果。</p>
+      <p><b>2. 关键点回归</b>：68 点人脸关键点模型，输出眉、眼、鼻、唇、下颌轮廓坐标，
+        用于几何层计算与界面可视化。</p>
+      <p><b>3. CNN 表情分类（主判据）</b>：FaceExpressionNet，轻量卷积网络，
+        在 FER+ / AffectNet 类人脸表情数据上训练，输出 7 类 softmax 概率
+        （neutral / happy / sad / angry / fearful / disgusted / surprised）。
+        权重为 uint8 量化，约 3.4 MB，随项目放在 <code>/models</code> 目录，完全离线加载。</p>
+      <p><b>4. 几何规则引擎（辅助/降级）</b>：以瞳距归一化，计算 7 个尺度不变的几何量，
+        再与 7 个情绪原型做高斯核匹配，softmax 得到分布：</p>
+      <div class="formula">
+        mouthOpen = ‖p62 − p66‖ / d        张口度（AU26）<br>
+        mouthWide = ‖p48 − p54‖ / d        唇宽（AU12 横向）<br>
+        cornerUp = (y51 − (y48+y54)/2) / d  嘴角上扬（AU12）<br>
+        browRaise = (ȳeyeTop − ȳ19,24) / d  眉眼距（AU1+2）<br>
+        innerBrow = (ȳeyeTop − ȳ21,22) / d  眉心上抬（AU1+2 内侧）<br>
+        eyeOpen = (EAR_left + EAR_right) / 2  眼睛开合（AU5）<br>
+        mouthRound = mouthOpen / mouthWide  唇形圆度（MAR，惊讶时嘴变圆）<br><br>
+        s<sub>c</sub> = − Σ<sub>k</sub> w<sub>k</sub> · ((f<sub>k</sub> − μ<sub>c,k</sub>) / σ<sub>k</sub>)²　，
+        P<sub>geo</sub>(c) = softmax(s<sub>c</sub> / T)，T = 2.6
+      </div>
+      <p><b>5. 双层融合</b>（CNN 可用时，权重自适应）：</p>
+      <div class="formula">
+        w<sub>geo</sub> = 0.10 + 0.30 · (1 − max P<sub>CNN</sub>)　　（CNN 越不确定，几何层话语权越大）<br>
+        若 max P<sub>geo</sub> &gt; 0.93 则 w<sub>geo</sub> ≥ 0.38，且 w<sub>geo</sub> ≤ 0.42　（强动作单元证据）<br>
+        P = normalize( (1 − w<sub>geo</sub>) · P<sub>CNN</sub> + w<sub>geo</sub> · P<sub>geo</sub> )<br>
+        consistency = 1 − ½·Σ<sub>c</sub> |P<sub>CNN</sub>(c) − P<sub>geo</sub>(c)|　（层级一致性，用于界面提示与置信度加权）
+      </div>
+      <p><b>6. 时序平滑与置信度</b>：视频/摄像头按约 100 ms 采样一帧，对每个人脸位置做指数滑动平均
+        （α = 0.45）；置信度与稳定度：</p>
+      <div class="formula">
+        P̄<sub>t</sub> = (1−α)·P̄<sub>t−1</sub> + α·P<sub>t</sub><br>
+        conf = 0.58·norm(max P̄) + 0.22·detScore + 0.20·consistency<br>
+        streak = 连续同一情绪帧数（≥3 帧才触发换歌单；另有 stability = 最近 24 帧一致占比，用于界面显示）
+      </div>
+      <p><b>7. 情绪坐标</b>：由 7 类概率加权得到效价与唤醒度
+        <code>V = Σpᵢ·vᵢ</code>、<code>A = Σpᵢ·aᵢ</code>（Russell 环形模型），作为推荐的中间表示。</p>
+
+      <h3>二、歌曲推荐算法</h3>
+      <p><b>1. 情绪 → 声学目标向量</b>：把情绪映射到 5 维可计算特征空间。</p>
+      <table>
+        <tr><th>情绪</th><th>valence</th><th>energy</th><th>dance</th><th>acoustic</th><th>BPM</th></tr>
+        <tr><td>开心</td><td>0.92</td><td>0.82</td><td>0.80</td><td>0.22</td><td>122</td></tr>
+        <tr><td>悲伤</td><td>0.12</td><td>0.24</td><td>0.22</td><td>0.80</td><td>68</td></tr>
+        <tr><td>愤怒</td><td>0.18</td><td>0.95</td><td>0.56</td><td>0.08</td><td>148</td></tr>
+        <tr><td>惊讶</td><td>0.62</td><td>0.78</td><td>0.70</td><td>0.16</td><td>130</td></tr>
+        <tr><td>恐惧</td><td>0.14</td><td>0.50</td><td>0.20</td><td>0.60</td><td>92</td></tr>
+        <tr><td>厌恶</td><td>0.20</td><td>0.45</td><td>0.36</td><td>0.50</td><td>100</td></tr>
+        <tr><td>平静</td><td>0.50</td><td>0.42</td><td>0.50</td><td>0.60</td><td>90</td></tr>
+      </table>
+      <p><b>2. 三种调节策略</b>：共情（T = 原型）、疗愈（T = 原型 ⊕ 向上情绪，λ=0.62）、
+        提振（T = 原型 ⊕ 高能原型，λ=0.58）。</p>
+      <p><b>3. 打分函数</b>（每首候选曲，权重和为 1）：</p>
+      <div class="formula">
+        closeness = 1 − Σ wᵢ·|fᵢ − tᵢ| / Σ wᵢ　　w = (energy 1.15, valence 1.50, dance 0.95, acoustic 0.70, tempo 0.85)<br>
+        valFit   = exp(−(f<sub>v</sub>−t<sub>v</sub>)² / (2·0.24²))<br>
+        moodMatch= exp(−d²<sub>circ</sub> / (2·0.46²))，d<sub>circ</sub> = ‖(V,A) − (V*,A*)‖<br>
+        affinity = 1 − Σ|fᵢ − prefᵢ| / 5　（用户偏好向量）<br>
+        tempoFit = exp(−(ln(f<sub>bpm</sub>/t<sub>bpm</sub>))² / (2·0.26²))<br><br>
+        score = 0.42·closeness + 0.18·valFit + 0.16·moodMatch + 0.14·affinity + 0.10·tempoFit
+      </div>
+      <p><b>4. 列表多样性（MMR）</b>：逐首贪心选择，
+        <code>mmr = 0.78·score − 0.22·max sim(候选, 已选)</code>，
+        相似度取特征 L1 距离并经同歌手/同曲风惩罚，避免整张歌单同质。</p>
+      <p><b>5. 情绪弧线排序</b>：疗愈/提振模式下，首曲取与当前情绪最接近的一首（先共情），
+        其后按目标契合度递增排列，形成「被理解 → 被带出」的过渡曲线。</p>
+      <p><b>6. 反馈学习</b>：喜欢 / 不喜欢 / 跳过会在线更新偏好向量
+        <code>pref ← pref + η·(f − pref)</code>（η<sub>like</sub>=0.22，η<sub>dislike</sub>=−0.20），
+        存入 localStorage，下一次推荐即生效。</p>
+
+      <h3>三、曲库与在线接口</h3>
+      <p><b>本地曲库</b>：8 首离线 MP3（程序化合成的器乐小品，无版权风险），
+        每首自带合成时设定的真实声学参数。</p>
+      <p><b>在线接口</b>：iTunes Search API（免密钥、支持跨域，返回 30 秒试听 m4a）为主，
+        Audius 开放 API 为备用；按 7 类情绪各配 2–3 组检索词。</p>
+      <p><b>在线曲目特征获取</b>（两段式）：</p>
+      <ul>
+        <li>元数据先验：曲风字典 + 标题/歌手关键词增量（如 lofi→能量↓原声↑、remix→律动↑）</li>
+        <li>音频实测：WebAudio 解码试听片段，用 FFT 计算 RMS 能量、谱质心（亮度）、
+          谱通量本体密度（律动）、自相关峰值（BPM）、
+          Krumhansl-Kessler 调性模板相关（大/小调 → 效价校正）</li>
+        <li>实测结果按 0.62/0.38 等比例校正元数据估计，界面标记「实测 / 估计」</li>
+      </ul>
+
+      <h3>四、工程与隐私</h3>
+      <p>Vue 3（Composition API）+ HTML5/CSS3/原生 ES Module；视频与摄像头用 Canvas 叠加可视化；
+        音频用原生 Audio 元素。全部模型权重与曲目均在本机，人脸图像只在内存中处理，
+        不写入磁盘、不上传网络。</p>
+
+      <h3>五、已知局限</h3>
+      <ul>
+        <li>表情分类对侧脸、强逆光、遮挡敏感，建议正脸、均匀光照。</li>
+        <li>在线接口的音色描述依赖元数据，实测特征只覆盖能量/速度/律动/调性四类。</li>
+        <li>情绪→音乐的映射是经验性先验，个体差异大，可用「喜欢/不喜欢」逐步校准。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/vue.global.prod.js"></script>
+<script src="vendor/face-api.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
