@@ -106,17 +106,33 @@ const App = {
 
     /* ------------------------------ 模型初始化 ------------------------ */
     async function initModel() {
+      if (modelState.value === 'ready') return;
+      modelState.value = 'loading';
+      modelError.value = '';
+      let settled = false;
+      // 看门狗：CDN 抽风时不至于一直停在「加载中」
+      const watchdog = setTimeout(() => {
+        if (settled) return;
+        modelState.value = 'error';
+        modelError.value = '模型加载超过 45 秒，可能是网络较慢。点下面按钮重试即可。';
+      }, 45000);
       try {
         await engine.init();
+        settled = true;
+        clearTimeout(watchdog);
         backend.value = engine.backend;
         modelState.value = 'ready';
         if (mode.value === 'camera') startCamera();
       } catch (e) {
+        settled = true;
+        clearTimeout(watchdog);
         console.error(e);
         modelState.value = 'error';
         modelError.value = e.message || String(e);
       }
     }
+
+    function retryModel() { initModel(); }
 
     /* ------------------------------ 摄像头 ---------------------------- */
     async function startCamera() {
@@ -781,7 +797,7 @@ const App = {
 
     return {
       // 状态
-      modelState, modelError, backend, mode, camState, camError, videoReady,
+      modelState, modelError, retryModel, backend, mode, camState, camError, videoReady,
       imageSrc, imageName, videoName, frame, fps, inferMs, countdown, flash,
       strategy, playlist, target, recommending, recInfo, recBusyKey, onlineEnabled, provider,
       measureEnabled, current, playing, progress, duration, volume, toastMsg,
